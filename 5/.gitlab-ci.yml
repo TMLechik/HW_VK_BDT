@@ -1,0 +1,69 @@
+stages:
+  - build
+  - test
+  - generate
+  - validate
+
+variables:
+  SCRIPT: "site_checker.sh"
+  TEST_SCRIPT: "test_site_checker.sh"
+  IMAGE_TAG: "$CI_REGISTRY_IMAGE:${CI_COMMIT_REF_SLUG}"
+  SITE_URL: "leshaboiko.ru"
+  ATTEMPTS: "3"
+  TIMEOUT: "5"
+  IMAGE_TAG: "$CI_REGISTRY_IMAGE:${CI_COMMIT_REF_SLUG}"
+
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --destination "${IMAGE_TAG}"
+
+test:
+  stage: test
+  image: $IMAGE_TAG
+  needs:
+    - job: build
+      artifacts: false
+  script:
+    - /usr/local/bin/test_site_checker.sh
+
+generate_html:
+  image: $IMAGE_TAG
+  stage: generate
+  script:
+    - chmod +x /usr/local/bin/site_checker.sh
+    - /usr/local/bin/site_checker.sh --attempt=$ATTEMPTS --output=html "$SITE_URL"
+    - ls -lh check_result.html
+  artifacts:
+    paths:
+      - check_result.html
+    expire_in: 1 day
+  only:
+    - branches
+
+validate_html:
+  image: $IMAGE_TAG
+  stage: validate
+  dependencies:
+    - generate_html
+  script:
+    - test -f check_result.html || (echo "Файл не найден!" && exit 1)
+    - grep -q "<!DOCTYPE html>" check_result.html || (echo "DOCTYPE отсутствует" && exit 1)
+    - grep -q "<table" check_result.html || (echo "Нет таблицы с результатами" && exit 1)
+    - grep -qE "Сайт (доступен|недоступен)" check_result.html || (echo "Нет итогового статуса" && exit 1)
+    - echo "✅ HTML-файл успешно проверен."
+  artifacts:
+    paths:
+      - check_result.html
+    expire_in: 1 day
+  only:
+    - branches
